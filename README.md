@@ -2,6 +2,8 @@
 
 Um mod para o Claude Code que mostra o uso do seu plano **ao lado do chat**, sem precisar abrir as configurações.
 
+<p align="center"><img src="docs/panel.png" alt="Painel do Usage Monitor no app desktop: anéis da sessão de 5 h e da semana, uso por produto, histórico e contexto" width="520"></p>
+
 - **Painel** (fixo ao lado da conversa, ou como widget no app desktop) com todos os limites do plano:
   - Sessão atual (5 h), Semana (todos os modelos), Semana · Sonnet / Opus, e qualquer limite novo que a Anthropic adicionar
   - Quando cada um reinicia (“reinicia em 2h 14m”)
@@ -10,9 +12,11 @@ Um mod para o Claude Code que mostra o uso do seu plano **ao lado do chat**, sem
   - Histórico das últimas 5 h em minigráfico
   - **Semana por produto**: quanto do uso semanal veio do Claude Code, dos chats, do Cowork etc.
   - Uso extra (créditos), quando ativado
-  - Contexto da conversa atual (tokens usados / janela) e custo equivalente em API (estimativa)
+  - **Quanto dá para usar**: ~% por dia na semana e ~% por hora na sessão
+  - **Claude Code neste computador**: tokens, custo estimado e respostas de hoje e dos últimos 7 dias, somando todas as sessões
+  - Contexto da conversa atual, tokens de entrada e saída, quanto veio do cache, e custo equivalente em API (estimativa)
 - **Barra compacta** logo acima da caixa de mensagem: `◆ 5h ████░░┃░░░ 42% ↻ 2h 14m · 7d 19% · contexto 36%`
-- **Alertas** ao passar de 80% e 95% (configurável), uma vez por período, com notificação do sistema no limite mais alto.
+- **Alertas** ao passar de 80% e 95% (configurável), uma vez por período, com notificação do sistema no limite mais alto, e um aviso quando a sessão ou a semana reiniciam.
 
 ## De onde vêm os dados
 
@@ -71,7 +75,8 @@ claude plugin test .
 
 - `hooks/register.tsx` — ganchos, painel e barra
 - `hooks/data.ts` — leitura da conta e da sessão, histórico e alertas
-- `hooks/lib.ts` — funções puras (formatação, ritmo, projeção, barras)
+- `hooks/lib.ts` — funções puras (formatação, ritmo, projeção, orçamento, totais)
+- `hooks/svg.ts` — anéis, barras e gráfico desenhados em SVG
 - `hooks/i18n.ts` — textos em português e inglês
 - `tests/usage.test.tsx` — testes em todas as superfícies
 
@@ -80,3 +85,7 @@ claude plugin test .
 ## English
 
 Live Claude plan usage beside the chat: 5-hour session, weekly limits (all models, Sonnet, Opus, and any new one), reset countdowns, a pace marker, a projection of when you would hit 100%, a 5-hour history, extra usage, the context window and an estimated API-equivalent cost. Plus a one-line band above the prompt and threshold alerts. Set `language` to `en`; the command is then `/usage-monitor`. Figures come from your account's usage endpoint (the Settings → Usage numbers), with this session's last rate-limit reading as a fallback.
+
+## Licença
+
+MIT — veja [LICENSE](LICENSE).

@@ -1,7 +1,7 @@
 // Pure helpers: parsing the account response, formatting, pacing, the
 // projection and the bars. Nothing here touches `$`.
 
-import type { BreakdownRow, ExtraUsage, UsageSample, UsageWindow } from '../types'
+import type { BreakdownRow, DayTotal, ExtraUsage, TokenCounts, UsageSample, UsageWindow } from '../types'
 
 export type Lang = 'pt' | 'en'
 
@@ -285,13 +285,13 @@ export function sparkline(samples: readonly UsageSample[], now: number, width: n
   let idx = 0
   const sorted = samples.filter(s => s.t >= start - HOUR).sort((a, b) => a.t - b.t)
   // Value standing at the start of the span.
-  while (idx < sorted.length && sorted[idx].t < start) carry = sorted[idx++].p
+  while (idx < sorted.length && sorted[idx]!.t < start) carry = sorted[idx++]!.p
   for (let c = 0; c < cells; c++) {
     const end = start + (c + 1) * slice
     let peak: number | undefined
-    while (idx < sorted.length && sorted[idx].t < end) {
-      peak = Math.max(peak ?? 0, sorted[idx].p)
-      carry = sorted[idx].p
+    while (idx < sorted.length && sorted[idx]!.t < end) {
+      peak = Math.max(peak ?? 0, sorted[idx]!.p)
+      carry = sorted[idx]!.p
       idx++
     }
     const v = peak ?? carry
@@ -330,4 +330,49 @@ export function budget(w: UsageWindow, now: number): Budget | undefined {
   if (leftMs < unit) return { kind: 'rest', amount: remaining, leftMs }
 
   return { kind: unit === DAY ? 'day' : 'hour', amount: remaining / (leftMs / unit) }
+}
+
+// ------------------------------------------------------------ token totals
+
+export const NO_TOKENS: TokenCounts = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, turns: 0 }
+
+export function addTokens(a: TokenCounts, b: Partial<TokenCounts>): TokenCounts {
+  return {
+    input: a.input + (b.input ?? 0),
+    output: a.output + (b.output ?? 0),
+    cacheRead: a.cacheRead + (b.cacheRead ?? 0),
+    cacheWrite: a.cacheWrite + (b.cacheWrite ?? 0),
+    turns: a.turns + (b.turns ?? 0),
+  }
+}
+
+/** Every token the model read or wrote. */
+export function totalTokens(c: TokenCounts): number {
+  return c.input + c.output + c.cacheRead + c.cacheWrite
+}
+
+/** The share of the input served from the prompt cache, 0 to 100. */
+export function cacheShare(c: TokenCounts): number | undefined {
+  const read = c.input + c.cacheRead + c.cacheWrite
+  return read > 0 ? (c.cacheRead / read) * 100 : undefined
+}
+
+/** The local date of `ms` as `YYYY-MM-DD`. */
+export function dayKey(ms: number): string {
+  try {
+    return new Date(ms).toLocaleDateString('en-CA')
+  } catch {
+    return new Date(ms).toISOString().slice(0, 10)
+  }
+}
+
+/** The days of the last `n` local days, today included, summed. */
+export function sumDays(ledger: readonly DayTotal[], now: number, n: number): DayTotal {
+  const keys = new Set(Array.from({ length: n }, (_, i) => dayKey(now - i * DAY)))
+  let sum: DayTotal = { ...NO_TOKENS, day: dayKey(now), usd: 0 }
+  for (const d of ledger) {
+    if (!keys.has(d.day)) continue
+    sum = { ...addTokens(sum, d), day: sum.day, usd: sum.usd + d.usd }
+  }
+  return sum
 }

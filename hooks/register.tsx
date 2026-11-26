@@ -14,14 +14,27 @@
 import { atom, read } from 'claude-code'
 import type { Elements, Register } from 'claude-code'
 
-import type { UsageSample, UsageSnapshot, UsageWindow } from '../types'
-import { hideBand, lastFetchAt, lastRaw, loadHistory, refresh, saveRaw, summary, toggleBand } from './data'
+import type { DayTotal, TokenCounts, UsageSample, UsageSnapshot, UsageWindow } from '../types'
+import {
+  hideBand,
+  lastFetchAt,
+  lastRaw,
+  loadHistory,
+  recordTurn,
+  refresh,
+  saveRaw,
+  startLedger,
+  summary,
+  toggleBand,
+} from './data'
 import type { Config } from './data'
 import { strings } from './i18n'
 import {
   LEVEL_COLOR,
+  NO_TOKENS,
   bar,
   budget,
+  cacheShare,
   elapsedFraction,
   fmtClock,
   fmtDuration,
@@ -33,6 +46,8 @@ import {
   parseThresholds,
   project,
   sparkline,
+  sumDays,
+  totalTokens,
   windowLabel,
   windowShort,
 } from './lib'
@@ -47,6 +62,8 @@ const snapshotAtom = atom({ plugin: 'usage-monitor', key: 'snapshot' } as const,
 const historyAtom = atom({ plugin: 'usage-monitor', key: 'history' } as const, [], { shape: 'history-1' })
 const refreshingAtom = atom({ plugin: 'usage-monitor', key: 'isRefreshing' } as const, false)
 const bandHiddenAtom = atom({ plugin: 'usage-monitor', key: 'isBandHidden' } as const, false)
+const chatTokensAtom = atom({ plugin: 'usage-monitor', key: 'chatTokens' } as const, NO_TOKENS, { shape: 'tokens-1' })
+const ledgerAtom = atom({ plugin: 'usage-monitor', key: 'ledger' } as const, [], { shape: 'ledger-1' })
 
 type UI = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>
 type RichUI = Pick<Elements['desktop'], 'Box' | 'Text' | 'Button' | 'Svg'>
@@ -62,6 +79,8 @@ type View = {
   px: number
   onRefresh: () => unknown
   isRefreshing: boolean
+  chat: TokenCounts
+  ledger: readonly DayTotal[]
 }
 
 /** Desktop cells come to about this many CSS pixels across. */
@@ -88,6 +107,7 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     await loadHistory($)
+    await startLedger($)
     await $.command.register({ name: cfg.command, description: t.commandDesc, argumentHint: t.commandHint })
 
     $.clock.every(cfg.refreshMs, () => void refresh($, cfg))
@@ -98,6 +118,14 @@ export const register: Register = (on, options) => {
     }
 
     return next(e)
+  })
+
+  // Every finished response: this conversation's tokens and today's totals.
+  on('turn.complete', async ($, e, next) => {
+    const done = await next(e)
+    await recordTurn($, e.usage)
+
+    return done
   })
 
   // Pushed by the engine after each turn and when a window moves a point.
@@ -154,6 +182,8 @@ export const register: Register = (on, options) => {
     const snap = await read($, snapshotAtom)
     const history = await read($, historyAtom)
     const isRefreshing = await read($, refreshingAtom)
+    const chat = await read($, chatTokensAtom)
+    const ledger = await read($, ledgerAtom)
     const now = await $.clock.now()
     const cols = e.props.bodyColumns || 40
     const isWidget = e.props.placement === 'widget'
@@ -173,6 +203,8 @@ export const register: Register = (on, options) => {
       px: Math.round(cols * PX_PER_COL),
       onRefresh: () => refresh($, cfg, true),
       isRefreshing,
+      chat,
+      ledger,
     }
 
     if (e.surface !== 'terminal' && 'Svg' in table) return isWidget ? RichGlance(table, view) : RichPane(table, view)
@@ -226,10 +258,9 @@ function budgetText(cfg: Config, w: UsageWindow, now: number): string | undefine
   const b = budget(w, now)
   if (!b) return undefined
   const pct = fmtPct(Math.round(b.amount), cfg.lang)
-  if (b.kind === 'day') return `~${pct}${cfg.t.perDay}`
-  if (b.kind === 'hour') return `~${pct}${cfg.t.perHour}`
+  if (b.kind === 'rest') return cfg.t.restUntil(pct, fmtDuration(b.leftMs))
 
-  return cfg.t.restUntil(pct, fmtDuration(b.leftMs))
+  return `~${pct}${b.kind === 'day' ? cfg.t.perDay : cfg.t.perHour}`
 }
 
 /** When the 5-hour window would reach 100%, by the clock where it is known. */
@@ -444,6 +475,9 @@ function RichPane(ui: RichUI, v: View) {
         )}
       </Box>
 
+      {/* every session on this computer, today and this week */}
+      {UseTiles(ui, cfg, v)}
+
       {/* this conversation */}
       {(ctx?.percent !== undefined || snap.costUsd !== undefined) && (
         <Box flexDirection="column" gap={1}>
@@ -463,6 +497,26 @@ function RichPane(ui: RichUI, v: View) {
                 </Text>
               </Box>
               <Svg source={meter(ctx.percent, HEX[level(ctx.percent)], px - 16, 8)} alt={`${t.context} ${fmtPct(ctx.percent, lang)}`} />
+            </Box>
+          )}
+          {v.chat.turns > 0 && (
+            <Box flexDirection="column">
+              <Box flexDirection="row" justifyContent="space-between">
+                <Text weight="medium">{t.tokensWord[0]!.toUpperCase() + t.tokensWord.slice(1)}</Text>
+                <Text>
+                  <Text dimColor size="footnote">
+                    {fmtTokens(v.chat.input + v.chat.cacheRead + v.chat.cacheWrite)} {t.tokensIn} ·{' '}
+                  </Text>
+                  <Text weight="semibold" tabular>
+                    {fmtTokens(v.chat.output)} {t.tokensOut}
+                  </Text>
+                </Text>
+              </Box>
+              {cacheShare(v.chat) !== undefined && (
+                <Text color="success" size="caption">
+                  {t.fromCache(fmtPct(Math.round(cacheShare(v.chat)!), lang))}
+                </Text>
+              )}
             </Box>
           )}
           {snap.costUsd !== undefined && (
@@ -493,6 +547,41 @@ function RichPane(ui: RichUI, v: View) {
           <Svg source={meter(snap.extra.percent, HEX[level(snap.extra.percent)], px - 16, 8)} alt={t.extra} />
         </Box>
       )}
+    </Box>
+  )
+}
+
+/** Today and the last 7 days, summed over every session with the mod on. */
+function UseTiles(ui: RichUI, cfg: Config, v: View) {
+  const { Box, Text } = ui
+  const { t, lang } = cfg
+  const today = sumDays(v.ledger, v.now, 1)
+  const week = sumDays(v.ledger, v.now, 7)
+  if (week.turns === 0) return ''
+  const tile = (label: string, d: DayTotal) => (
+    <Box flexDirection="column" flexGrow={1} borderStyle="round" borderColor="subtle" paddingX={2} paddingY={1}>
+      <Text dimColor size="caption">
+        {label}
+      </Text>
+      <Text weight="bold" size="heading" tabular>
+        {fmtTokens(totalTokens(d))} <Text dimColor size="footnote">{t.tokensWord}</Text>
+      </Text>
+      <Text size="footnote" tabular>
+        {fmtUsd(d.usd, lang)} <Text dimColor>· {t.replies(d.turns)}</Text>
+      </Text>
+    </Box>
+  )
+
+  return (
+    <Box flexDirection="column" gap={1}>
+      {SectionTitle(ui, t.yourUse)}
+      <Box flexDirection={v.cols >= 56 ? 'row' : 'column'} gap={1}>
+        {tile(t.today, today)}
+        {tile(t.last7, week)}
+      </Box>
+      <Text dimColor size="caption">
+        {t.yourUseNote}
+      </Text>
     </Box>
   )
 }
@@ -753,6 +842,35 @@ function TermPane(ui: UI, v: View) {
             </Text>
           </Text>
           {Bar(ui, bar(ctx.percent, width), LEVEL_COLOR[level(ctx.percent)])}
+        </Box>
+      )}
+      {v.chat.turns > 0 && (
+        <Text>
+          <Text bold>{t.tokensWord}</Text>
+          <Text dimColor>
+            {' '}
+            {fmtTokens(v.chat.input + v.chat.cacheRead + v.chat.cacheWrite)} {t.tokensIn} · {fmtTokens(v.chat.output)} {t.tokensOut}
+            {cacheShare(v.chat) !== undefined ? ` · cache ${fmtPct(Math.round(cacheShare(v.chat)!), lang)}` : ''}
+          </Text>
+        </Text>
+      )}
+      {sumDays(v.ledger, now, 7).turns > 0 && (
+        <Box flexDirection="column">
+          <Text dimColor bold>
+            {t.yourUse.toUpperCase()}
+          </Text>
+          {[
+            [t.today, sumDays(v.ledger, now, 1)] as const,
+            [t.last7, sumDays(v.ledger, now, 7)] as const,
+          ].map(([label, d]) => (
+            <Text>
+              {label.padEnd(16)} <Text bold>{fmtTokens(totalTokens(d)).padStart(6)}</Text> {t.tokensWord}
+              <Text dimColor>
+                {' '}
+                · {fmtUsd(d.usd, lang)} · {t.replies(d.turns)}
+              </Text>
+            </Text>
+          ))}
         </Box>
       )}
       {snap.costUsd !== undefined && (

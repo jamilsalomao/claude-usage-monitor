@@ -1,4 +1,5 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
+import type { TestBody } from 'claude-code/testing'
 
 import { bar, budget, fmtDuration, fmtPct, parseAccountUsage, project, sparkline } from '../hooks/lib'
 
@@ -56,7 +57,18 @@ const BAND = {
   },
 } as const
 
-type On = Parameters<Parameters<typeof test>[1]>[1]
+type On = Parameters<TestBody>[1]
+type Mounted = { findAll: (q: { type?: string }) => Promise<readonly { props: Record<string, unknown> }[]> }
+
+/** What each drawing says it shows: the `alt` of every Svg. */
+async function alts(ui: Mounted): Promise<string> {
+  return (await ui.findAll({ type: 'Svg' })).map(e => String(e.props.alt)).join(' | ')
+}
+
+/** `/uso <args>`, as the person would type it. */
+function uso($: { command: { run: (input: never) => Promise<unknown> } }, args: string) {
+  return $.command.run({ command: 'uso', args, origin: { kind: 'composer' }, presentation: {} } as never)
+}
 
 function engine(on: On, fetch: { status: number; text: string }) {
   on('command.register', () => ({ value: { command: 'uso' } }))
@@ -80,13 +92,15 @@ function engine(on: On, fetch: { status: number; text: string }) {
 test('the panel shows the account windows, on every surface', async ($, on) => {
   engine(on, { status: 200, text: ACCOUNT_BODY })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await $.command.run({ command: 'uso', args: 'atualizar' })
+  await uso($, 'atualizar')
 
   // The SVG surfaces: rings for the two main limits, cards, a split bar.
   for (const surface of ['desktop', 'vscode', 'mobile'] as const) {
     const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 80 }, surface })
-    expect((await ui.find({ type: 'Svg', alt: /Sessão 42%/ }))?.type).toBe('Svg')
-    expect(await ui.find({ type: 'Svg', alt: /Semana 19%/ })).toBeDefined()
+    const drawn = await alts(ui)
+    expect(drawn).toContain('Sessão 42%')
+    expect(drawn).toContain('Semana 19%')
+    expect(drawn).toContain('Claude Code 99%')
     expect(await ui.find({ type: 'Text', text: /2h 14m/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /Semana · Sonnet/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /conta · ao vivo/ })).toBeDefined()
@@ -109,7 +123,7 @@ test('the panel shows the account windows, on every surface', async ($, on) => {
 test('the band sums it up above the prompt', async ($, on) => {
   engine(on, { status: 200, text: ACCOUNT_BODY })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  await $.command.run({ command: 'uso', args: 'atualizar' })
+  await uso($, 'atualizar')
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...BAND, surface })
@@ -119,18 +133,46 @@ test('the band sums it up above the prompt', async ($, on) => {
     const hidden = await $.ui.mount({ ...BAND, surface })
     expect(await hidden.find({ type: 'Text', text: /42%/ })).toBeUndefined()
     await hidden.unmount()
-    await $.command.run({ command: 'uso', args: 'barra' })
+    await uso($, 'barra')
   }
 })
 
 test('without the account endpoint it falls back to this session', async ($, on) => {
   engine(on, { status: 401, text: '{}' })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await $.command.run({ command: 'uso', args: 'atualizar' })
+  await uso($, 'atualizar')
 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await ui.find({ type: 'Svg', alt: /Sessão 40%/ })).toBeDefined()
+  expect(await alts(ui)).toContain('Sessão 40%')
   expect(await ui.find({ type: 'Text', text: /HTTP 401/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('each reply counts into the conversation and into today', async ($, on) => {
+  mock.store(on)
+  engine(on, { status: 200, text: ACCOUNT_BODY })
+  on('turn.complete', () => ({ text: '', reason: 'answer' }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const usage = {
+    input_tokens: 2_000,
+    output_tokens: 3_000,
+    cache_read_input_tokens: 90_000,
+    cache_creation_input_tokens: 8_000,
+    model: 'claude-opus-5-5',
+  }
+  const turn = { answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer', usage } as const
+  await ($.turn as any).complete(turn)
+  await ($.turn as any).complete({ ...turn, turnId: 't2' })
+  await uso($, 'atualizar')
+
+  const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 80 }, surface: 'desktop' })
+  // 2 × (2k + 90k + 8k) in, 2 × 3k out; 180k of 200k from the cache.
+  const texts = (await ui.findAll({ type: 'Text' })).map(e => e.text).join(' | ')
+  expect(texts).toContain('200k entrada')
+  expect(texts).toContain('6k saída')
+  expect(texts).toContain('90% da entrada veio do cache')
+  expect(texts).toContain('CLAUDE CODE NESTE COMPUTADOR')
+  expect(texts).toContain('2 respostas')
   await ui.unmount()
 })
 

@@ -42,6 +42,24 @@ export type UsageSnapshot = {
   error?: string
 }
 
+/** Token counts, as the API reports them, summed. */
+export type TokenCounts = {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  /** Responses counted. */
+  turns: number
+}
+
+/** One local day of Claude Code use, summed over every session with the mod on. */
+export type DayTotal = TokenCounts & {
+  /** The local date, `YYYY-MM-DD`. */
+  day: string
+  /** Estimated at API prices; not a bill. */
+  usd: number
+}
+
 /** One reading of the 5-hour window, for the history and the projection. */
 export type UsageSample = { t: number; p: number; r?: string }
 
@@ -52,6 +70,12 @@ declare module 'claude-code' {
       history: Shaped<UsageSample[]>
       isRefreshing: boolean
       isBandHidden: boolean
+      /** This conversation's tokens since the mod loaded in it. */
+      chatTokens: Shaped<TokenCounts>
+      /** The last days of use, newest last; mirrored from the shared store. */
+      ledger: Shaped<DayTotal[]>
+      /** The session cost already counted into the ledger. */
+      costSeen: number
     }
   }
 }

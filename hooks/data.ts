@@ -13,9 +13,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 
-import type { UsageSample, UsageSnapshot, UsageWindow } from '../types'
+import type { DayTotal, TokenCounts, UsageSample, UsageSnapshot, UsageWindow } from '../types'
 import type { Strings } from './i18n'
-import { fmtDuration, fmtPct, parseAccountUsage, windowLabel, windowShort } from './lib'
+import { NO_TOKENS, addTokens, dayKey, fmtDuration, fmtPct, parseAccountUsage, windowLabel, windowShort } from './lib'
 import type { Lang } from './lib'
 
 export type Dollar = EngineInterface
@@ -39,6 +39,9 @@ const snapshotAtom = atom({ plugin: 'usage-monitor', key: 'snapshot' } as const,
 const historyAtom = atom({ plugin: 'usage-monitor', key: 'history' } as const, [], { shape: 'history-1' })
 const refreshingAtom = atom({ plugin: 'usage-monitor', key: 'isRefreshing' } as const, false)
 const bandHiddenAtom = atom({ plugin: 'usage-monitor', key: 'isBandHidden' } as const, false)
+const chatTokensAtom = atom({ plugin: 'usage-monitor', key: 'chatTokens' } as const, NO_TOKENS, { shape: 'tokens-1' })
+const ledgerAtom = atom({ plugin: 'usage-monitor', key: 'ledger' } as const, [], { shape: 'ledger-1' })
+const costSeenAtom = atom({ plugin: 'usage-monitor', key: 'costSeen' } as const, -1)
 
 /** This copy of the module's own bookkeeping; a reload starts it over. */
 const runtime = {
@@ -113,6 +116,7 @@ async function refreshNow($: Dollar, cfg: Config, force: boolean): Promise<void>
   await recordHistory($, snap, now)
   await checkAlerts($, cfg, snap, now)
   await checkResets($, cfg, snap)
+  await syncLedger($)
   if (cfg.showStatus) $.ui.status(statusText(cfg, snap, now))
 }
 
@@ -303,4 +307,66 @@ export async function toggleBand($: Dollar): Promise<boolean> {
 
 export async function hideBand($: Dollar): Promise<void> {
   await update($, bandHiddenAtom, () => true)
+}
+
+// ------------------------------------------------------- tokens and days
+
+/** Days of use kept in the shared ledger. */
+const LEDGER_DAYS = 8
+
+/**
+ * Starts counting this session's cost from now, so a session the mod joins
+ * late, or one resumed, adds only what it spends from here.
+ */
+export async function startLedger($: Dollar): Promise<void> {
+  const seen = await read($, costSeenAtom)
+  if (seen < 0) {
+    const usd = (await $.session.usage().catch(() => null))?.cost?.usd ?? 0
+    await update($, costSeenAtom, () => usd)
+  }
+  await syncLedger($)
+}
+
+/** Copies the shared ledger, which other sessions write too, into this session. */
+async function syncLedger($: Dollar): Promise<void> {
+  const stored = (await $.store.get('ledger').catch(() => undefined)) as DayTotal[] | undefined
+  if (!Array.isArray(stored)) return
+  await update($, ledgerAtom, () => stored)
+}
+
+/** Counts one finished response: into this conversation and into today. */
+export async function recordTurn($: Dollar, usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number } | undefined): Promise<void> {
+  const counts: TokenCounts = usage
+    ? {
+        input: usage.input_tokens,
+        output: usage.output_tokens,
+        cacheRead: usage.cache_read_input_tokens,
+        cacheWrite: usage.cache_creation_input_tokens,
+        turns: 1,
+      }
+    : { ...NO_TOKENS }
+  if (usage) await update($, chatTokensAtom, c => addTokens(c, counts))
+
+  const local = await $.session.usage().catch(() => null)
+  const usd = local?.cost?.usd
+  let spent = 0
+  if (usd !== undefined) {
+    const seen = await read($, costSeenAtom)
+    spent = Math.max(0, usd - Math.max(0, seen))
+    await update($, costSeenAtom, () => usd)
+  }
+  if (!usage && spent === 0) return
+
+  const now = await $.clock.now()
+  const today = dayKey(now)
+  const stored = ((await $.store.get('ledger').catch(() => undefined)) as DayTotal[] | undefined) ?? []
+  const list = Array.isArray(stored) ? stored.filter(d => d && typeof d.day === 'string') : []
+  const index = list.findIndex(d => d.day === today)
+  const base: DayTotal = index >= 0 ? list[index]! : { ...NO_TOKENS, day: today, usd: 0 }
+  const day: DayTotal = { ...addTokens(base, counts), day: today, usd: base.usd + spent }
+  const next = (index >= 0 ? list.map((d, i) => (i === index ? day : d)) : [...list, day])
+    .sort((a, b) => a.day.localeCompare(b.day))
+    .slice(-LEDGER_DAYS)
+  await $.store.set('ledger', next).catch(() => undefined)
+  await update($, ledgerAtom, () => next)
 }

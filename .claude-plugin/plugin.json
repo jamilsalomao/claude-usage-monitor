@@ -1,6 +1,6 @@
 {
   "name": "usage-monitor",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Live Claude plan usage (5-hour session, weekly limits, extra usage), context window and session cost in a panel and a band above the prompt.",
   "author": {
     "name": "jamilsalomao",
@@ -55,5 +55,6 @@
       "description": "Also raises a native notification when the highest threshold is crossed.",
       "default": true
     }
-  }
+  },
+  "license": "MIT"
 }
