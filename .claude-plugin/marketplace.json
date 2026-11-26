@@ -1,0 +1,13 @@
+{
+  "name": "claude-usage-monitor",
+  "description": "Live Claude plan usage beside the chat: 5-hour and weekly limits, pace, projection and context.",
+  "owner": {
+    "name": "jamilsalomao"
+  },
+  "plugins": [
+    {
+      "name": "usage-monitor",
+      "source": "./"
+    }
+  ]
+}

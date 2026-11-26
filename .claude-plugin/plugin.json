@@ -1,0 +1,59 @@
+{
+  "name": "usage-monitor",
+  "version": "1.0.0",
+  "description": "Live Claude plan usage (5-hour session, weekly limits, extra usage), context window and session cost in a panel and a band above the prompt.",
+  "author": {
+    "name": "jamilsalomao",
+    "url": "https://github.com/jamilsalomao"
+  },
+  "repository": "https://github.com/jamilsalomao/claude-usage-monitor",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Language / Idioma",
+      "description": "Interface language: pt-BR (Português) or en (English).",
+      "default": "pt-BR",
+      "options": [
+        "pt-BR",
+        "en"
+      ]
+    },
+    "refreshSeconds": {
+      "type": "number",
+      "title": "Refresh interval (seconds)",
+      "description": "How often the account usage is fetched. Minimum 30.",
+      "default": 60
+    },
+    "showBand": {
+      "type": "boolean",
+      "title": "Show the band above the prompt",
+      "description": "A one-line usage summary right above the message box.",
+      "default": true
+    },
+    "openPanelOnStart": {
+      "type": "boolean",
+      "title": "Open the panel when a session starts",
+      "description": "Opens the usage panel (as a widget in the desktop app). The terminal opens it only with the command.",
+      "default": true
+    },
+    "showStatusLine": {
+      "type": "boolean",
+      "title": "Show usage in the status line",
+      "description": "Adds a short usage entry to the status line.",
+      "default": false
+    },
+    "alertThresholds": {
+      "type": "string",
+      "title": "Alert thresholds (%)",
+      "description": "Comma-separated percentages that raise a toast once per window, e.g. 80,95. Empty turns alerts off.",
+      "default": "80,95"
+    },
+    "desktopNotifications": {
+      "type": "boolean",
+      "title": "System notification at the highest threshold",
+      "description": "Also raises a native notification when the highest threshold is crossed.",
+      "default": true
+    }
+  }
+}
